@@ -3,56 +3,35 @@ import asyncio
 from datetime import datetime, timedelta
 import time
 from contract_filter import COMMON_CONTRACTS
+import requests
+import os
+from dotenv import load_dotenv
 
 # Initialize AsyncWeb3
 w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider("https://mainnet.base.org"))
 
+load_dotenv()
+
 
 async def get_contract_age(contract_address):
-    try:
-        # Verify it's actually a contract
-        code = await w3.eth.get_code(contract_address)
-        if code == b"":  # Not a contract
-            return None
-
-        # Binary search approach for finding deployment block
-        latest_block = await w3.eth.block_number
-        week_ago_block = latest_block - (7 * 24 * 60 * 30)
-
-        left = week_ago_block
-        right = latest_block
-        deployment_block = None
-
-        # First check if contract exists at earliest block
-        code = await w3.eth.get_code(contract_address, block_identifier=left)
-        if code != b"":
-            return None
-
-        # Binary search for deployment block
-        while left <= right:
-            mid = (left + right) // 2
-            try:
-                code = await w3.eth.get_code(contract_address, block_identifier=mid)
-                if code == b"":
-                    left = mid + 1
-                else:
-                    deployment_block = mid
-                    right = mid - 1
-            except Exception:
-                left = mid + 1
-
-        if deployment_block:
-            block = await w3.eth.get_block(deployment_block)
-            return {
-                "deployment_block": deployment_block,
-                "deployment_time": datetime.fromtimestamp(block["timestamp"]),
-            }
-
-    except Exception as e:
-        print(f"Error in get_contract_age: {str(e)}")
-        return None
-
-    return None
+    url = f"https://api.basescan.org/api"
+    params = {
+        "module": "account",
+        "action": "txlist",
+        "address": contract_address,
+        "startblock": 0,
+        "endblock": 99999999,
+        "page": 1,
+        "offset": 1,
+        "sort": "asc",
+        "apikey": os.getenv("BASESCAN_API_KEY"),
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data["result"]:
+            first_tx = data["result"][0]
+            return datetime.fromtimestamp(int(first_tx["timeStamp"]))
 
 
 async def monitor_contract_activity():
@@ -107,7 +86,11 @@ async def monitor_contract_activity():
             contracts_to_check = []
             for contract, interactions in recent_interactions.items():
                 total_interactions = sum(interactions)
-                if total_interactions >= INTERACTION_THRESHOLD:
+                if (
+                    total_interactions >= INTERACTION_THRESHOLD
+                    and contract not in alerted_contracts
+                    and contract not in known_old_contracts
+                ):
                     contracts_to_check.append(contract)
 
             # Check the contracts
@@ -120,7 +103,7 @@ async def monitor_contract_activity():
                 # Process results
                 for contract, contract_info in zip(contracts_to_check, contract_infos):
                     if contract_info:
-                        age = datetime.now() - contract_info["deployment_time"]
+                        age = datetime.now() - contract_info
                         if age < timedelta(days=7):
                             if age.days > 0:
                                 age_str = f"{age.days} days, {age.seconds//3600} hours"
@@ -132,9 +115,7 @@ async def monitor_contract_activity():
                             print(
                                 f"\nBlock {block_number} - High activity on new contract: {contract}"
                             )
-                            print(
-                                f"Deployment time: {contract_info['deployment_time']}"
-                            )
+                            print(f"Deployment time: {contract_info}")
                             print(f"Age: {age_str}")
                             print(
                                 f"Total interactions across {len(recent_interactions[contract])} blocks: {sum(recent_interactions[contract])}"
