@@ -10,7 +10,7 @@ w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider("https://mainnet.base.org"))
 
 async def get_contract_age(contract_address):
     try:
-        # Get contract code to verify it's actually a contract
+        # Verify it's actually a contract
         code = await w3.eth.get_code(contract_address)
         if code == b"":  # Not a contract
             return None
@@ -58,7 +58,6 @@ async def get_contract_age(contract_address):
 async def monitor_contract_activity():
     alerted_contracts = set()
     known_old_contracts = set()
-    contract_age_cache = {}
     recent_interactions = {}
     BLOCKS_TO_MONITOR = 5
     INTERACTION_THRESHOLD = 10
@@ -77,6 +76,11 @@ async def monitor_contract_activity():
             print(f"Checking block {block_number}")
             last_processed_block = block_number
 
+            if block_number > last_processed_block + 1:
+                print(
+                    f"Warning: Skipped {block_number - last_processed_block - 1} blocks"
+                )
+
             # Track interactions in current block
             current_block_interactions = {}
 
@@ -91,7 +95,7 @@ async def monitor_contract_activity():
                             current_block_interactions.get(contract, 0) + 1
                         )
 
-            # Update sliding window
+            # Update rolling window
             for contract, count in current_block_interactions.items():
                 if contract not in recent_interactions:
                     recent_interactions[contract] = []
@@ -103,14 +107,10 @@ async def monitor_contract_activity():
             contracts_to_check = []
             for contract, interactions in recent_interactions.items():
                 total_interactions = sum(interactions)
-                if (
-                    total_interactions >= INTERACTION_THRESHOLD
-                    and contract not in alerted_contracts
-                    and contract not in known_old_contracts
-                ):
+                if total_interactions >= INTERACTION_THRESHOLD:
                     contracts_to_check.append(contract)
 
-            # Check all contracts concurrently
+            # Check the contracts
             if contracts_to_check:
                 age_tasks = [
                     get_contract_age(contract) for contract in contracts_to_check
