@@ -52,13 +52,13 @@ async def monitor_contract_activity():
                 await asyncio.sleep(1)
                 continue
 
-            print(f"Checking block {block_number}")
-            last_processed_block = block_number
-
             if block_number > last_processed_block + 1:
                 print(
                     f"Warning: Skipped {block_number - last_processed_block - 1} blocks"
                 )
+
+            print(f"Checking block {block_number}")
+            last_processed_block = block_number
 
             # Track interactions in current block
             current_block_interactions = {}
