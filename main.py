@@ -34,6 +34,21 @@ async def get_contract_age(contract_address):
             return datetime.fromtimestamp(int(first_tx["timeStamp"]))
 
 
+async def get_contract_source(contract_address):
+    url = f"https://api.basescan.org/api"
+    params = {
+        "module": "contract",
+        "action": "getsourcecode",
+        "address": contract_address,
+        "apikey": os.getenv("BASESCAN_API_KEY"),
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data["result"][0]["ContractName"]:
+            return data["result"][0]["ContractName"]
+
+
 async def monitor_contract_activity():
     alerted_contracts = set()
     known_old_contracts = set()
@@ -98,10 +113,21 @@ async def monitor_contract_activity():
                 age_tasks = [
                     get_contract_age(contract) for contract in contracts_to_check
                 ]
-                contract_infos = await asyncio.gather(*age_tasks)
+                source_tasks = [
+                    get_contract_source(contract) for contract in contracts_to_check
+                ]
+
+                # Run both sets of tasks concurrently
+                results = await asyncio.gather(
+                    asyncio.gather(*age_tasks), asyncio.gather(*source_tasks)
+                )
+                contract_infos = results[0]  # Age results
+                contract_sources = results[1]  # Source results
 
                 # Process results
-                for contract, contract_info in zip(contracts_to_check, contract_infos):
+                for contract, contract_info, contract_source in zip(
+                    contracts_to_check, contract_infos, contract_sources
+                ):
                     if contract_info:
                         age = datetime.now() - contract_info
                         if age < timedelta(days=7):
@@ -115,7 +141,9 @@ async def monitor_contract_activity():
                             print(
                                 f"\nBlock {block_number} - High activity on new contract: {contract}"
                             )
-                            print(f"Deployment time: {contract_info}")
+                            print(
+                                f"Contract Name: {contract_source if contract_source else 'Unverified'}"
+                            )
                             print(f"Age: {age_str}")
                             print(
                                 f"Total interactions across {len(recent_interactions[contract])} blocks: {sum(recent_interactions[contract])}"
