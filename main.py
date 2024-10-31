@@ -49,6 +49,30 @@ async def get_contract_source(contract_address):
             return data["result"][0]["ContractName"]
 
 
+async def detect_contract_type(contract_address):
+    # ERC165 interface IDs
+    INTERFACES = {
+        "0x80ac58cd": "ERC721",
+        "0xd9b67a26": "ERC1155",
+        "0x36372b07": "ERC20",
+    }
+
+    types = []
+    for interface_id in INTERFACES:
+        try:
+            supports = await w3.eth.call(
+                {
+                    "to": contract_address,
+                    "data": f"0x01ffc9a7{interface_id[2:]}",  # supportsInterface(bytes4)
+                }
+            )
+            if int.from_bytes(supports, "big"):
+                types.append(INTERFACES[interface_id])
+        except:
+            continue
+    return types
+
+
 async def monitor_contract_activity():
     alerted_contracts = set()
     known_old_contracts = set()
@@ -116,17 +140,23 @@ async def monitor_contract_activity():
                 source_tasks = [
                     get_contract_source(contract) for contract in contracts_to_check
                 ]
+                type_tasks = [
+                    detect_contract_type(contract) for contract in contracts_to_check
+                ]
 
-                # Run both sets of tasks concurrently
+                # Run all tasks concurrently
                 results = await asyncio.gather(
-                    asyncio.gather(*age_tasks), asyncio.gather(*source_tasks)
+                    asyncio.gather(*age_tasks),
+                    asyncio.gather(*source_tasks),
+                    asyncio.gather(*type_tasks),
                 )
                 contract_infos = results[0]  # Age results
                 contract_sources = results[1]  # Source results
+                contract_types = results[2]  # Interface detection results
 
                 # Process results
-                for contract, contract_info, contract_source in zip(
-                    contracts_to_check, contract_infos, contract_sources
+                for contract, contract_info, contract_source, contract_type in zip(
+                    contracts_to_check, contract_infos, contract_sources, contract_types
                 ):
                     if contract_info:
                         age = datetime.now() - contract_info
@@ -144,10 +174,21 @@ async def monitor_contract_activity():
                             print(
                                 f"Contract Name: {contract_source if contract_source else 'Unverified'}"
                             )
+                            print(
+                                f"Contract Type: {', '.join(contract_type) if contract_type else 'Unknown'}"
+                            )
                             print(f"Age: {age_str}")
                             print(
                                 f"Total interactions across {len(recent_interactions[contract])} blocks: {sum(recent_interactions[contract])}"
                             )
+
+                            # Skip if it's an ERC20 token
+                            if "ERC20" in (contract_type or []):
+                                print("Skipping ERC20 token")
+                                known_old_contracts.add(contract)
+                                if contract in recent_interactions:
+                                    del recent_interactions[contract]
+                                continue
 
                             alerted_contracts.add(contract)
                         else:
