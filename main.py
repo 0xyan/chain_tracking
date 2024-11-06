@@ -49,28 +49,21 @@ async def get_contract_source(contract_address):
             return data["result"][0]["ContractName"]
 
 
-async def detect_contract_type(contract_address):
-    # ERC165 interface IDs
-    INTERFACES = {
-        "0x80ac58cd": "ERC721",
-        "0xd9b67a26": "ERC1155",
-        "0x36372b07": "ERC20",
-    }
+def send_telegram_message(message):
+    token_tg = os.getenv("TELEGRAM_TOKEN")
+    id_tg = os.getenv("TELEGRAM_ID")
 
-    types = []
-    for interface_id in INTERFACES:
-        try:
-            supports = await w3.eth.call(
-                {
-                    "to": contract_address,
-                    "data": f"0x01ffc9a7{interface_id[2:]}",  # supportsInterface(bytes4)
-                }
-            )
-            if int.from_bytes(supports, "big"):
-                types.append(INTERFACES[interface_id])
-        except:
-            continue
-    return types
+    url = f"https://api.telegram.org/bot{token_tg}/sendMessage"
+    params = {
+        "chat_id": id_tg,
+        "text": message,
+        "parse_mode": "HTML",  # This allows HTML formatting
+    }
+    try:
+        response = requests.post(url, params=params)
+        return response.json()
+    except Exception as e:
+        print(f"Failed to send Telegram message: {e}")
 
 
 async def monitor_contract_activity():
@@ -88,15 +81,16 @@ async def monitor_contract_activity():
             block_number = block["number"]
 
             if block_number <= last_processed_block:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)
                 continue
+
+            print(f"Checking block {block_number}")
 
             if block_number > last_processed_block + 1:
                 print(
                     f"Warning: Skipped {block_number - last_processed_block - 1} blocks"
                 )
 
-            print(f"Checking block {block_number}")
             last_processed_block = block_number
 
             # Track interactions in current block
@@ -140,26 +134,38 @@ async def monitor_contract_activity():
                 source_tasks = [
                     get_contract_source(contract) for contract in contracts_to_check
                 ]
-                type_tasks = [
-                    detect_contract_type(contract) for contract in contracts_to_check
-                ]
 
                 # Run all tasks concurrently
                 results = await asyncio.gather(
-                    asyncio.gather(*age_tasks),
-                    asyncio.gather(*source_tasks),
-                    asyncio.gather(*type_tasks),
+                    asyncio.gather(*age_tasks), asyncio.gather(*source_tasks)
                 )
                 contract_infos = results[0]  # Age results
                 contract_sources = results[1]  # Source results
-                contract_types = results[2]  # Interface detection results
 
                 # Process results
-                for contract, contract_info, contract_source, contract_type in zip(
-                    contracts_to_check, contract_infos, contract_sources, contract_types
+                for contract, contract_info, contract_source in zip(
+                    contracts_to_check, contract_infos, contract_sources
                 ):
+                    # Skip Token contracts immediately
+                    if contract_source == "Token":
+                        known_old_contracts.add(contract)
+                        if contract in recent_interactions:
+                            del recent_interactions[contract]
+                        continue
+
                     if contract_info:
                         age = datetime.now() - contract_info
+
+                        # Skip if contract is too new (less than 10 minutes old)
+                        if age < timedelta(minutes=10):
+                            print(
+                                f"Skipping contract {contract} - too new ({age.seconds//60} minutes old)"
+                            )
+                            # Clean up recent interactions for too new contracts
+                            if contract in recent_interactions:
+                                del recent_interactions[contract]
+                            continue
+
                         if age < timedelta(days=7):
                             if age.days > 0:
                                 age_str = f"{age.days} days, {age.seconds//3600} hours"
@@ -168,27 +174,29 @@ async def monitor_contract_activity():
                             else:
                                 age_str = f"{age.seconds//60} minutes"
 
+                            message = (
+                                f"🚨 <b>New Active Contract Detected</b>\n\n"
+                                f"Block: {block_number}\n"
+                                f"Address: <a href='https://basescan.org/address/{contract}'>{contract}</a>\n"
+                                f"Name: {contract_source if contract_source else 'Unverified'}\n"
+                                f"Age: {age_str}\n"
+                                f"Activity: {sum(recent_interactions[contract])} txs in {len(recent_interactions[contract])} blocks"
+                            )
+
+                            # Console output
                             print(
                                 f"\nBlock {block_number} - High activity on new contract: {contract}"
                             )
                             print(
                                 f"Contract Name: {contract_source if contract_source else 'Unverified'}"
                             )
-                            print(
-                                f"Contract Type: {', '.join(contract_type) if contract_type else 'Unknown'}"
-                            )
                             print(f"Age: {age_str}")
                             print(
                                 f"Total interactions across {len(recent_interactions[contract])} blocks: {sum(recent_interactions[contract])}"
                             )
 
-                            # Skip if it's an ERC20 token
-                            if "ERC20" in (contract_type or []):
-                                print("Skipping ERC20 token")
-                                known_old_contracts.add(contract)
-                                if contract in recent_interactions:
-                                    del recent_interactions[contract]
-                                continue
+                            # Send Telegram notification
+                            send_telegram_message(message)
 
                             alerted_contracts.add(contract)
                         else:
@@ -196,12 +204,12 @@ async def monitor_contract_activity():
                             if contract in recent_interactions:
                                 del recent_interactions[contract]
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
 
         except Exception as e:
             print(f"Error occurred: {str(e)}")
             print(f"Error type: {type(e)}")
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
 
 
 async def main():

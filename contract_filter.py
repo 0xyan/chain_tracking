@@ -1,4 +1,3 @@
-# Common contracts to filter out (you'll need to populate this)
 COMMON_CONTRACTS = {
     "0x4200000000000000000000000000000000000006": "WETH",
     "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913": "USDC",
@@ -11,5 +10,5 @@ COMMON_CONTRACTS = {
     "0x2F16386bB37709016023232523FF6d9DAF444BE3": "BasedMining",
     "0x00BD5CCc0444a516Ce47566DA0b104dAeC96F1D6": "QBX Reward",
     "0x18bF3Ba9D8b067Cc04D4FF500FE7100d452da9ff": "Opensea Mint Treat",
-    # Add more known contracts to filter
+    "0x25f396d9A5CDd1E359B2025C3A59A3B281644dD9": "QBXVIPClubReward",
 }
